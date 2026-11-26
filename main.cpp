@@ -3,6 +3,8 @@
 #include <iostream>
 #include <Eigen/Dense>
 #include <raylib.h>
+#include <rlgl.h>
+#include <raymath.h>
 
 /* -------Assumptions--------
 	* all angular calculations are done in radian and not degrees
@@ -11,19 +13,32 @@
 	* limb_max and limb_min being based around the height from base to platform and the fore_limb
 */
 
-const double pi = 3.14159265358979323846;
-double limb, fore_limb, AB_Dist, a_ang, b_ang, a_radius, b_radius;
-double limb_max, limb_min;
-struct motor{
-	double limb;
-	double theta;
-};
+// Function decleartions
+static void initMotors();
+static void initStewart();
+static void calcRotationMatrix();
+static void calcMotorRotation(double theta_offset);
+static void step(char ang, double step);
+Vector3 toRayLibCoord(const Eigen::Vector3d& v);
 
+// constansts and global variables initialized and defined at the start of int main
+const double pi = 3.14159265358979323846;
+double AB_Dist, base_ang, top_ang, base_radius, top_radius;
+double limb, fore_limb, fore_ang,limb_max, limb_min;
+
+// Points for the platform and base as well as the motors and center of the top platform  
 Eigen::Vector3d topPoints[6];
 Eigen::Vector3d basePoints[6];
+Eigen::Vector3d foreLimbs[6];
 Eigen::Vector3d top_center;
+
+struct motor {
+	double limb = 0.0;
+	double theta = 0.0;
+};
 struct motor motors[6];
 
+// rotations for the platform in relation to it's frame and the relating rotation matrix
 double alpha = 0.0, beta = 0.0, rho = 0.0;
 Eigen::Matrix3d r_matrix = Eigen::Matrix3d::Identity();
 
@@ -37,7 +52,7 @@ static void printPlatformVals()
 	printf("--------------- BASE PLATE ----------------\n");
 	for (int i = 0; i < 6; i++)
 	{
-		printf("a_%d : (%.3f, %.3f, %.3f)\n", i + 1, basePoints[i](0), basePoints[i](1), basePoints[i](2));
+		printf("a_%d : (%.3f, %.3f, %.3f)\n", i + 1, basePoints[i].x(), basePoints[i].y(), basePoints[i].z());
 	}
 }
 
@@ -57,45 +72,104 @@ static void printMotors()
 	printf("---------------- Motors ----------------\n");
 	for (int i = 0; i < 6; i++)
 	{
-		printf("motor @ (a_%d, b_%d) limb : %.3f , angle : %.3f\n", i+1, i+1, motors[i].limb, motors[i].theta);
+		printf("motor @ (a_%d, b_%d) limb : %.3f , angle : %.3f , ", i+1, i+1, motors[i].limb, motors[i].theta);
+		printf("fore_limb : %.3f %.3f %.3f\n", foreLimbs[i].x(), foreLimbs[i].y(), foreLimbs[i].y());
+	}
+}
+
+// set the motors back to the original position, based on which way the forelimb should face
+static void initMotors()
+{
+	for (int i = 0; i < 6; i++)
+	{
+		double offset = 0.0;
+		if (i == 0 || i == 1) offset = pi / 6;
+		else if (i == 2 || i == 5) offset = 0.0;
+		else offset = pi / 3;
+
+		motors[i].theta = 0.0;
+		motors[i].limb = AB_Dist + fore_limb * sin(motors[i].theta);
+
+
+		
 	}
 }
 
 // Initialize the stewart platform given the values of the platform, base plate and the limbs
 static void initStewart()
 {
-	// initializing all points of the platform in relation to the platforms frame
-	basePoints[0] << a_radius * cos(a_ang), -a_radius * sin(a_ang), 0;
-	basePoints[1] << a_radius * cos(a_ang), a_radius * sin(a_ang), 0;
-	basePoints[2] << a_radius * sin(a_ang - pi/6), a_radius * cos(a_ang - pi/6), 0;
-	basePoints[3] << -a_radius * cos(pi/3 - a_ang), a_radius * sin(pi/3 - a_ang), 0;
-	basePoints[4] << -a_radius * cos(pi/3 - a_ang), -a_radius * sin(pi/3 - a_ang), 0;
-	basePoints[5] << a_radius * sin(a_ang - pi/6), -a_radius * cos(a_ang - pi/6), 0;
+	basePoints[0] << base_radius * sin(base_ang - pi / 6), -base_radius * cos(base_ang - pi / 6), 0;
+	basePoints[1] << base_radius * sin(base_ang - pi / 6), base_radius * cos(base_ang - pi / 6), 0;
+	basePoints[2] << base_radius * cos(base_ang), base_radius* sin(base_ang), 0;
+	basePoints[3] << -base_radius * cos(pi / 3 - base_ang), -base_radius * sin(pi / 3 - base_ang), 0;
+	basePoints[4] << -base_radius * cos(pi / 3 - base_ang), base_radius * sin(pi / 3 - base_ang), 0;
+	basePoints[5] << base_radius * cos(base_ang), -base_radius * sin(base_ang), 0;
 
-	// initializing all points of the base in relation to the base plates frame
-	topPoints[0] << b_radius * cos(b_ang), -b_radius * sin(b_ang), 0;
-	topPoints[1] << b_radius * cos(b_ang), b_radius* sin(b_ang), 0;
-	topPoints[2] << -b_radius * sin(pi / 6 - b_ang), b_radius * cos(pi/6 - b_ang), 0;
-	topPoints[3] << -b_radius * cos(pi / 3 - b_ang), b_radius * sin(pi / 3 - b_ang), 0;
-	topPoints[4] << -b_radius * cos(pi / 3 - b_ang), -b_radius * sin(pi / 3 - b_ang), 0;
-	topPoints[5] << -b_radius * sin(pi/6 - b_ang), -b_radius * cos(pi/6 - b_ang), 0;
+	topPoints[0] << -top_radius * sin(pi / 6 - top_ang), -top_radius * cos(pi / 6 - top_ang), 0;
+	topPoints[1] << -top_radius * sin(pi / 6 - top_ang), top_radius * cos(pi / 6 - top_ang), 0;
+	topPoints[2] << top_radius * cos(top_ang), top_radius* sin(top_ang), 0;
+	topPoints[3] << -top_radius * cos(pi / 3 - top_ang), -top_radius * sin(pi / 3 - top_ang), 0;
+	topPoints[4] << -top_radius * cos(pi / 3 - top_ang), top_radius * sin(pi / 3 - top_ang), 0;
+	topPoints[5] << top_radius * cos(top_ang), -top_radius * sin(top_ang), 0;
 
-	// initializing all motors with the limb distance from base to platform and angle of forelimb
-	for (int i = 0; i < 6; i++)
-	{
-		motors[i].limb = AB_Dist + fore_limb * sin(-pi/2);
-		motors[i].theta = -pi/2;
-	}
+	foreLimbs[0] << (basePoints[0].x() / abs(basePoints[0].x())) * cos(fore_ang - pi / 2) * fore_limb, (basePoints[0].y() / abs(basePoints[0].y()))* sin(fore_ang - pi / 2)* fore_limb, 0.0;
+	foreLimbs[1] << (basePoints[1].x() / abs(basePoints[1].x())) * cos(fore_ang - pi / 2) * fore_limb, (basePoints[1].y() / abs(basePoints[1].y()))* sin(fore_ang - pi / 2)* fore_limb, 0.0;
+	foreLimbs[2] << (basePoints[2].x() / abs(basePoints[2].x())) * cos(fore_ang - (3 * pi) / 2) * fore_limb, (basePoints[2].y() / abs(basePoints[2].y()))* sin(fore_ang - (3 * pi) / 2)* fore_limb, 0.0;
+	foreLimbs[3] << (basePoints[3].x() / abs(basePoints[3].x())) * cos((5 * pi) / 6 - fore_ang) * fore_limb, (basePoints[3].y() / abs(basePoints[4].y()))* sin((5 * pi) / 6 - fore_ang)* fore_limb, 0.0;
+	foreLimbs[4] << (basePoints[4].x() / abs(basePoints[4].x())) * cos((5 * pi) / 6 - fore_ang) * fore_limb, (basePoints[4].y() / abs(basePoints[4].y()))* sin((5 * pi) / 6 - fore_ang)* fore_limb, 0.0;
+	foreLimbs[5] << (basePoints[5].x() / abs(basePoints[5].x())) * cos(fore_ang - (3 * pi) / 2) * fore_limb, (basePoints[5].y() / abs(basePoints[5].y()))* sin(fore_ang - (3 * pi) / 2)* fore_limb, 0.0;
 
-	// initializing the center of the platform and the maximum and minimum distance limbs can move
-	top_center << 0, 0, AB_Dist + fore_limb * sin(-pi / 2);
+	initMotors();
+
+	top_center << 0, 0, AB_Dist;
 	limb_max = AB_Dist + fore_limb;
 	limb_min = AB_Dist - fore_limb;
 
 	printf("Initialized stewart metrics:\n");
 	printf("\tlimb : %.3fmm\n\tforelimb : %.3fmm\n\tmax BP_dist : %.3fmm\n\tmin BP_dist : %.3fmm\n", limb, fore_limb, limb_max, limb_min);
-	printf("Base Plate:\n\tradius : %.3f\n\tangle offset : %.3f\n", a_radius, a_ang);
-	printf("Platform:\n\tradius : %.3f\n\tangle offset : %.3f\n", b_radius, b_ang);
+	printf("Base Plate:\n\tradius : %.3f\n\tangle offset : %.3f\n", base_radius, base_ang);
+	printf("Platform:\n\tradius : %.3f\n\tangle offset : %.3f\n", top_radius, top_ang);
+}
+
+static void calcForeLimbPos()
+{
+	foreLimbs[0] << (basePoints[0].x() / abs(basePoints[0].x())) * cos(fore_ang - pi / 2) * fore_limb, (basePoints[0].y() / abs(basePoints[0].y()))* sin(fore_ang - pi / 2)* fore_limb, 0.0;
+	foreLimbs[1] << (basePoints[1].x() / abs(basePoints[1].x())) * cos(fore_ang - pi / 2) * fore_limb, (basePoints[1].y() / abs(basePoints[1].y()))* sin(fore_ang - pi / 2)* fore_limb, 0.0;
+	foreLimbs[2] << (basePoints[2].x() / abs(basePoints[2].x())) * cos(fore_ang - (3 * pi) / 2) * fore_limb, (basePoints[2].y() / abs(basePoints[2].y()))* sin(fore_ang - (3 * pi) / 2)* fore_limb, 0.0;
+	foreLimbs[3] << (basePoints[3].x() / abs(basePoints[3].x())) * cos((5 * pi) / 6 - fore_ang) * fore_limb, (basePoints[3].y() / abs(basePoints[4].y()))* sin((5 * pi) / 6 - fore_ang)* fore_limb, 0.0;
+	foreLimbs[4] << (basePoints[4].x() / abs(basePoints[4].x())) * cos((5 * pi) / 6 - fore_ang) * fore_limb, (basePoints[4].y() / abs(basePoints[4].y()))* sin((5 * pi) / 6 - fore_ang)* fore_limb, 0.0;
+	foreLimbs[5] << (basePoints[5].x() / abs(basePoints[5].x())) * cos(fore_ang - (3 * pi) / 2) * fore_limb, (basePoints[5].y() / abs(basePoints[5].y()))* sin(fore_ang - (3 * pi) / 2)* fore_limb, 0.0;
+
+	for (int i = 0; i < 6; i++)
+	{
+		foreLimbs[i].x() = cos(motors[i].theta) * foreLimbs[i].x();
+		foreLimbs[i].y() = cos(motors[i].theta) * foreLimbs[i].y();
+		foreLimbs[i].z() = sin(motors[i].theta) * fore_limb;
+	}
+}
+
+static void calcMotorRotation(double theta_step, int i)
+{
+	if ((i + 1) % 2)
+	{
+		if (motors[i].theta + theta_step > pi / 2) motors[i].theta = pi - motors[i].theta + theta_step;
+		else if (motors[i].theta + theta_step < 0)
+		{
+			motors[i].theta = 0;
+			printf("MAX @ MOTOR %d REACHED, alpha : %.3f beta : %.3f rho : %.3f\n", i, alpha, beta, rho);
+		}
+		else motors[i].theta += theta_step;
+	}
+	else
+	{
+		if (motors[i].theta - theta_step < pi / 2) motors[i].theta = pi + motors[i].theta - theta_step;
+		else if (motors[i].theta - theta_step > pi)
+		{
+			motors[i].theta = pi;
+			printf("MAX @ MOTOR %d REACHED, alpha : %.3f beta : %.3f rho : %.3f\n", i, alpha, beta, rho);
+		}
+		else motors[i].theta -= theta_step;
+	}
 }
 
 static void calcRotationMatrix()
@@ -108,21 +182,18 @@ static void calcRotationMatrix()
 		for (int i = 0; i < 6; i++)
 		{
 			Eigen::Vector3d B_world = top_center + r_matrix * topPoints[i];
-			Eigen::Vector3d AB = B_world - topPoints[i];
-
+			Eigen::Vector3d AB = B_world - basePoints[i];
 			motors[i].limb = AB.norm();
-			motors[i].theta += atan(fore_limb / motors[i].limb);
+			//calcMotorRotation(atan(fore_limb / motors[i].limb), i);
 
 		}
 	}
 	else
 	{
-		for (int i = 0; i < 6; i++)
-		{
-			motors[i].limb = AB_Dist + fore_limb * sin(-pi / 2);
-			motors[i].theta = -pi / 2;
-		}
+		initMotors();
 	}
+
+	calcForeLimbPos();
 }
 
 static void step(char ang, double step)
@@ -147,23 +218,25 @@ Vector3 toRayLibCoord(const Eigen::Vector3d& v)
 	return { (float)v.x(), (float)v.z(), -(float)v.y() };
 }
 
+
 int main(int argc, char** argv)
 {
 	limb = 200;
-	fore_limb = 30;
-	b_radius = 106.535;
-	b_ang = atan(b_radius / 28.0);
-	a_radius = 150.0;
-	a_ang = atan(a_radius / 45.0);
-	AB_Dist = sqrt(pow(limb, 2.0) + pow(fore_limb, 2.0));
+	fore_limb = 55;
+	top_radius = 106.535;
+	top_ang = atan(top_radius / 28.0);
+	base_radius = 150.0;
+	base_ang = atan(base_radius / 45.0);
+	AB_Dist = sqrt(pow(limb, 2.0) - pow(fore_limb, 2.0));
+
+	fore_ang = pi / 3;//(pi - (2 * pi - (3* base_ang))/3)/2;
+
+	InitWindow(1280, 720, "Stewart Platform");
 
 	initStewart();
 	calcRotationMatrix();
 	printRotationMatrix();
 	printMotors();
-
-	InitWindow(1280, 720, "Stewart Platform");
-
 	printPlatformVals();
 
 	Camera3D cam = {};
@@ -175,7 +248,7 @@ int main(int argc, char** argv)
 	SetTargetFPS(60);
 
 	char ang = 'a';
-	bool rotate = true;
+	bool rotate = false;
 	while (!WindowShouldClose())
 	{
 		if (IsKeyPressed(KEY_SPACE)) rotate = !rotate;
@@ -196,15 +269,19 @@ int main(int argc, char** argv)
 			DrawGrid(20, 50.0f);
 				for (int i = 0; i < 6; i++)
 				{
-					Eigen::Vector3d A = top_center + r_matrix * topPoints[i];
+					Eigen::Vector3d T = top_center + r_matrix * topPoints[i];
 					int j = (i + 1) % 6;
-					Eigen::Vector3d A2 = top_center + r_matrix * topPoints[j];
+					Eigen::Vector3d T2 = top_center + r_matrix * topPoints[j];
+					Eigen::Vector3d motor_fore_limb = basePoints[i] + foreLimbs[i];
 
-					DrawLine3D(toRayLibCoord(basePoints[i]), toRayLibCoord(A), RED);					// limbs
+					DrawLine3D(toRayLibCoord(basePoints[i]), toRayLibCoord(T), RED);					// limbs
+					DrawLine3D(toRayLibCoord(basePoints[i]), toRayLibCoord( motor_fore_limb), DARKGREEN);
+
 					DrawLine3D(toRayLibCoord(basePoints[i]), toRayLibCoord(basePoints[j]), DARKGRAY);	// lines connecting base plate
-					DrawLine3D(toRayLibCoord(A), toRayLibCoord(A2), BLUE);								// lines connecting top plate
-					DrawSphere(toRayLibCoord(basePoints[i]), 4.0f, DARKGRAY);							//draw base points
-					DrawSphere(toRayLibCoord(A), 4.0f, BLUE);											// draw top points
+					DrawLine3D(toRayLibCoord(T), toRayLibCoord(T2), BLUE);								// lines connecting top plate
+
+					DrawSphere(toRayLibCoord(basePoints[i]), 4.0f, DARKGRAY);							// draw base points
+					DrawSphere(toRayLibCoord(T), 4.0f, BLUE);											// draw top points
 				}
 		EndMode3D();
 		DrawText(TextFormat("alpha : %.3f beta : %.3f rho : %.3f", alpha, beta, rho), 10, 10, 20, BLACK);
